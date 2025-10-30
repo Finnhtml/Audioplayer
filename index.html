@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ordner-MP3-Player</title>
+  <style>
+    :root{
+      font-family: system-ui, Arial, sans-serif;
+      max-width: 900px;
+      margin: 18px auto;
+      padding: 12px;
+    }
+    header{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      margin-bottom:12px;
+    }
+    button, .file-button{
+      background:#0b63d6;
+      color:white;
+      border:none;
+      padding:8px 12px;
+      border-radius:8px;
+      cursor:pointer;
+      font-size:15px;
+    }
+    button.secondary{
+      background:#6c7887;
+    }
+    #tracks{
+      display:grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap:10px;
+      margin-top:14px;
+    }
+    .track{
+      border:1px solid #e1e4e8;
+      border-radius:8px;
+      padding:8px;
+      display:flex;
+      gap:8px;
+      align-items:center;
+      justify-content:space-between;
+      background:white;
+    }
+    .track .meta{
+      overflow:hidden;
+      padding-right:8px;
+    }
+    .track .meta .name{
+      font-weight:600;
+      font-size:14px;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .track .meta .size{
+      font-size:12px;
+      color:#555;
+      margin-top:4px;
+    }
+    footer{
+      margin-top:18px;
+      color:#666;
+      font-size:13px;
+    }
+    .hidden{ display:none; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1 style="margin:0; font-size:18px;">MP3-Ordner Player</h1>
+      <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+        <button id="pickDirBtn">Ordner wählen</button>
+        <button id="clearBtn" class="secondary">Zurücksetzen</button>
+      </div>
+    </header>
+
+    <!-- Fallback input: versteckt, wird nur getriggert, falls showDirectoryPicker nicht verfügbar ist -->
+    <input id="dirInput" type="file" webkitdirectory multiple accept=".mp3,audio/*" class="hidden" />
+
+    <section id="info" aria-live="polite"></section>
+
+    <section id="tracks" aria-label="Audiodateien"></section>
+
+    <!-- Unsichtbares Audioelement, das die Dateien abspielt -->
+    <audio id="player" controls style="width:100%; margin-top:12px;"></audio>
+
+    <footer>
+      Hinweis: Ordner-Auswahl funktioniert am besten in modernen Chromium-Browsern. Wenn nichts passiert, versuche den Button "Ordner wählen" erneut oder verwende die Dateiauswahl deines Browsers.
+    </footer>
+  </main>
+
+  <script>
+    const pickDirBtn = document.getElementById('pickDirBtn');
+    const dirInput = document.getElementById('dirInput');
+    const tracksEl = document.getElementById('tracks');
+    const infoEl = document.getElementById('info');
+    const player = document.getElementById('player');
+    const clearBtn = document.getElementById('clearBtn');
+
+    // speichert erzeugte object URLs zur späteren Freigabe
+    const objectUrls = [];
+
+    function humanFileSize(bytes) {
+      if (bytes === 0) return '0 B';
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      const sizes = ['B','KB','MB','GB','TB'];
+      return (bytes / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + sizes[i];
+    }
+
+    function clearAll() {
+      // stoppe player
+      player.pause();
+      player.src = '';
+      // revoke URLs
+      for (const u of objectUrls) {
+        try { URL.revokeObjectURL(u); } catch(e){}
+      }
+      objectUrls.length = 0;
+      tracksEl.innerHTML = '';
+      infoEl.textContent = '';
+    }
+
+    clearBtn.addEventListener('click', () => {
+      clearAll();
+    });
+
+    pickDirBtn.addEventListener('click', async () => {
+      clearAll();
+      if (window.showDirectoryPicker) {
+        // moderne API: showDirectoryPicker
+        try {
+          const dirHandle = await window.showDirectoryPicker();
+          infoEl.textContent = 'Scanne Ordner...';
+          const mp3Files = [];
+          // rekursive Funktion zum Durchlaufen
+          async function walk(handle, path = '') {
+            for await (const entry of handle.values()) {
+              if (entry.kind === 'file') {
+                if (entry.name.toLowerCase().endsWith('.mp3')) {
+                  mp3Files.push({handle: entry, path: path + entry.name});
+                }
+              } else if (entry.kind === 'directory') {
+                await walk(entry, path + entry.name + '/');
+              }
+            }
+          }
+          await walk(dirHandle);
+          if (mp3Files.length === 0) {
+            infoEl.textContent = 'Keine MP3-Dateien im ausgewählten Ordner gefunden.';
+            return;
+          }
+          infoEl.textContent = `${mp3Files.length} MP3(s) gefunden. Buttons werden erstellt...`;
+          for (const f of mp3Files) {
+            const file = await f.handle.getFile();
+            addTrackButton(file, f.path);
+          }
+          infoEl.textContent = `Bereit — ${mp3Files.length} Datei(en) geladen.`;
+        } catch (err) {
+          // Nutzer hat abgebrochen oder Fehler
+          console.error(err);
+          infoEl.textContent = 'Ordnerauswahl abgebrochen oder nicht erlaubt.';
+        }
+      } else {
+        // FALLBACK: file input mit webkitdirectory
+        dirInput.click();
+      }
+    });
+
+    dirInput.addEventListener('change', (ev) => {
+      clearAll();
+      const files = Array.from(ev.target.files || []);
+      const mp3s = files.filter(f => f.name.toLowerCase().endsWith('.mp3'));
+      if (mp3s.length === 0) {
+        infoEl.textContent = 'Keine MP3-Dateien ausgewählt.';
+        return;
+      }
+      infoEl.textContent = `${mp3s.length} MP3(s) ausgewählt. Buttons werden erstellt...`;
+      for (const f of mp3s) {
+        // wenn browser bereits File-Objekte hat, reicht das
+        addTrackButton(f, f.webkitRelativePath || f.name);
+      }
+      infoEl.textContent = `Bereit — ${mp3s.length} Datei(en) geladen.`;
+      // reset input damit derselbe Ordner später wieder gewählt werden kann
+      dirInput.value = '';
+    });
+
+    function addTrackButton(file, displayPath) {
+      const url = URL.createObjectURL(file);
+      objectUrls.push(url);
+
+      const track = document.createElement('div');
+      track.className = 'track';
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.title = displayPath;
+      name.textContent = displayPath;
+      const size = document.createElement('div');
+      size.className = 'size';
+      size.textContent = humanFileSize(file.size);
+
+      meta.appendChild(name);
+      meta.appendChild(size);
+
+      const btn = document.createElement('button');
+      btn.className = 'file-button';
+      btn.type = 'button';
+      btn.textContent = 'Play';
+      btn.addEventListener('click', () => {
+        // Wenn gerade dieselbe Datei schon spielt, toggle pause/play
+        if (player.src === url) {
+          if (player.paused) player.play();
+          else player.pause();
+          return;
+        }
+        // setze neue Quelle und spiele
+        player.src = url;
+        player.play().catch(err => {
+          console.warn('Autoplay blockiert oder Fehler beim Abspielen', err);
+          infoEl.textContent = 'Abspielen blockiert. Tippe auf das Audio-Steuerelement falls nötig.';
+        });
+      });
+
+      track.appendChild(meta);
+      track.appendChild(btn);
+
+      tracksEl.appendChild(track);
+    }
+
+    // Wenn tab geschlossen oder neu geladen wird, URLs freigeben
+    window.addEventListener('beforeunload', () => {
+      for (const u of objectUrls) {
+        try { URL.revokeObjectURL(u); } catch(e){}
+      }
+    });
+  </script>
+</body>
+</html>
